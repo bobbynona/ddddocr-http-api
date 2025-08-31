@@ -1,0 +1,25 @@
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 虚拟环境
+.venv/
+venv/
+
+# 打包和分发目录
+.eggs/
+*.egg-info/
+dist/
+build/
+
+# IDE/编辑器配置
+.idea/
+.vscode/
+
+# 其他
+.git
+.gitignore
+.dockerignore
+ocr_payload.json

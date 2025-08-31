@@ -1,0 +1,23 @@
+services:
+  py-ocr-service:
+    image: py-ocr-service:latest
+    build: .
+    ports:
+      # 将主机的端口映射到容器端口，两者都由 DDDDOCR_PORT 控制
+      - "${DDDDOCR_PORT:-8000}:8000"
+    volumes:
+      # 挂载本地目录到容器中，用于存放自定义模型
+      - ./models:/app/models
+    environment:
+      # --- 常规设置 ---
+      - DDDDOCR_PORT=${DDDDOCR_PORT:-8000}
+
+      # --- 身份验证设置 ---
+      # 是否对远程(公网)请求开启验证
+      - AUTH_REMOTE_ENABLED=true
+      # 是否对本地/内网请求开启验证 (测试时设为false以绕过)
+      - AUTH_LOCAL_ENABLED=false
+      # 用于验证JWT令牌的URL端点 (测试时使用公共服务)
+      - AUTH_VALIDATION_URL=https://httpbin.org/post
+      # 验证请求的超时时间（秒）
+      - AUTH_VALIDATION_TIMEOUT=20.0
