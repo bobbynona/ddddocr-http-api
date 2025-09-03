@@ -2,38 +2,51 @@
 
 [简体中文](./README_cn.md)
 
-This project provides a containerized, enhanced version of the `ddddocr` HTTP API, adding a flexible JWT-based authentication layer and other improvements for robust deployment.
+This project provides a containerized, enhanced `ddddocr` HTTP API service. It adds a flexible, JWT-based authentication layer and other improvements for robust deployment.
+
+## Architecture Design
+
+This service uses a **"Monkey Patching"** non-intrusive design:
+
+1.  **Library Dependency**: The project depends on the original `ddddocr` as a library, without modifying its source code.
+2.  **Dynamic Replacement**: At runtime, our `main.py` script imports the original `ddddocr` service and dynamically replaces its `run_server` function with our custom implementation (`our_custom_run_server`) before startup.
+3.  **Logic Injection**: In our custom `our_custom_run_server` function, we can inject enhanced features without altering the original library files:
+    *   **Auth Middleware**: Adds `AuthMiddleware` to the FastAPI application instance.
+    *   **Programmatic Auto-Initialization**: Programmatically calls the internal initialization method of `ddddocr` **before** starting the Uvicorn server, completely resolving startup timing and race condition issues in containerized environments.
+
+This design ensures that we can easily keep up with upstream `ddddocr` library updates while maintaining the stability and independence of our custom features.
 
 ## Features
 
-- Provides all core `ddddocr` OCR and detection functionalities.
-- Exposes functionalities via a FastAPI-based HTTP API.
-- Optional JWT-based authentication middleware with robust client IP detection (handles `X-Forwarded-For`).
-- Highly configurable via environment variables.
-- Easy to deploy using Docker/Podman Compose.
-- Graceful shutdown handling via a dedicated entrypoint script.
-- Auto-initialization of models on startup.
+-   Provides all core OCR and object detection features of `ddddocr`.
+-   Exposes services via a FastAPI-based HTTP API.
+-   **JWT Shared-Secret Authentication**: Secure and high-performance auth via `AuthMiddleware`.
+-   **Programmatic Auto-Initialization**: The service automatically loads models on startup, no external scripts or API calls needed.
+-   Highly configurable via environment variables.
+-   Easy to deploy using Docker/Podman Compose.
 
 ## Getting Started
 
-The easiest way to run the service is by using Docker Compose or Podman Compose.
+The most recommended and secure way to run this service is with Docker Compose or Podman Compose, using their `secrets` feature.
 
 1.  **Clone the repository:**
     ```bash
     git clone <repository_url>
-    cd py-ocr-service
+    cd py-ocr-service/ddddocr-http-api
     ```
 
-2.  **(Optional) Create a `.env` file:**
-    You can create a `.env` file in the project root to manage your configuration. See the **Configuration** section below for all available variables.
-    ```env
-    DDDDOCR_PORT=8080
-    AUTH_REMOTE_ENABLED=true
-    AUTH_VALIDATION_URL=https://your-auth-server.com/validate
-    AUTH_VALIDATION_TIMEOUT=15.0
+2.  **Create and Manage the Secret:**
+    We strongly advise using `podman secret` or `docker secret` to manage your `OCR_SHARED_SECRET` instead of using plaintext environment variables.
+    ```bash
+    # Generate a strong 256-bit key and store it in a Podman secret named ocr_shared_secret
+    openssl rand -base64 32 | podman secret create ocr_shared_secret -
     ```
+    For local development, you can also place the secret in a file named `ocr_secret.txt`.
 
-3.  **Run the service:**
+3.  **(Optional) Configure `compose.yml`:**
+    The default `compose.yml` is already configured to use a secret named `ocr_shared_secret`. You can adjust other environment variables like `DET_ENABLED` as needed.
+
+4.  **Run the service:**
     ```bash
     # Using Podman
     podman-compose up --build -d
@@ -42,50 +55,34 @@ The easiest way to run the service is by using Docker Compose or Podman Compose.
     docker compose up --build -d
     ```
 
-4.  The service will be available at `http://localhost:<DDDDOCR_PORT>`. It will be auto-initialized on startup.
+5.  The service will be available at `http://localhost:8000` and initializes automatically on startup.
 
 ## Configuration
 
-The service is configured using environment variables:
+The service is configured via environment variables. For production, `OCR_SHARED_SECRET` should be injected via `secrets`.
 
-| Variable                  | Description                                                                                                                               | Default     |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| `DDDDOCR_PORT`            | The port on which the service will run.                                                                                                   | `8000`      |
-| `AUTH_REMOTE_ENABLED`     | If `true`, enables JWT authentication for all requests determined to be from a remote (public) IP address.                                | `true`      |
-| `AUTH_LOCAL_ENABLED`      | If `true`, enables JWT authentication for requests determined to be from a local/private IP address.                                      | `false`     |
-| `AUTH_VALIDATION_URL`     | **Required if auth is enabled.** The URL of the external authentication service to validate JWTs. See API contract below.                   | `""`        |
-| `AUTH_VALIDATION_TIMEOUT` | The timeout in seconds for the request to the authentication service.                                                                     | `20.0`      |
-
-### Authentication Service API Contract
-
-When authentication is triggered, this service will make a `POST` request to the `AUTH_VALIDATION_URL`. Your authentication service is expected to conform to the following contract:
-
-**Request from this OCR service to your Auth Service:**
-
-*   **Method:** `POST`
-*   **Headers:** Includes the original `Authorization: Bearer <token>` header received from the client.
-*   **Body:** Empty.
-
-**Expected Responses from your Auth Service:**
-
-*   **Success (Token is valid):**
-    *   **Status Code:** `200 OK`
-    *   The response body can be anything; it is not checked by the OCR service.
-
-*   **Failure (Token is invalid, expired, etc.):**
-    *   **Status Code:** Any non-200 status code (e.g., `401 Unauthorized`).
-    *   The response from your auth service (including its status code and body) will be passed through to the original client that called the OCR service.
+| Variable                 | Injection Method        | Description                                                                                             | Default   |
+| ------------------------ | ----------------------- | -------------------------------------------------------------------------------------------------------- | --------- |
+| `DDDDOCR_LISTEN_ADDRESS` | Environment Variable    | The address and port for the service to listen on, e.g., `host:port` or just `port`. Also supports Unix socket paths. | `8000`    |
+| `AUTH_REMOTE_ENABLED`    | Environment Variable    | If `true`, enables JWT authentication for all requests determined to be from remote (public) IP addresses. | `true`    |
+| `AUTH_LOCAL_ENABLED`     | Environment Variable    | If `true`, enables JWT authentication for all requests determined to be from local/private IP addresses.   | `false`   |
+| `OCR_SHARED_SECRET_FILE` | From `compose.yml` secrets | Path to the file containing the shared secret (e.g., `/run/secrets/ocr_shared_secret`). The code prioritizes this. | `null`    |
+| `OCR_SHARED_SECRET`      | Env Var (local fallback) | The shared secret for signing/verifying JWTs. Used if the `_FILE` version is not present.              | `null`    |
+| `DET_ENABLED`            | Environment Variable    | If `true`, initializes and loads the object detection (det) model on startup.                            | `false`   |
 
 ## API Endpoints
 
-This service is fully compatible with the original `ddddocr` HTTP API. Once the service is running, you can access the interactive Swagger UI documentation at `http://localhost:<DDDDOCR_PORT>/docs`.
+This service is fully compatible with the original `ddddocr` HTTP API. While the service is running, you can access the interactive Swagger UI documentation at `http://localhost:<port>/docs`.
 
-## Development
+## Local Development
 
 This project uses `uv` for package management.
 
 1.  **Initialize Environment:**
     ```bash
+    # cd into the project directory
+    cd py-ocr-service/ddddocr-http-api
+
     # Create virtual environment
     uv venv
 
@@ -94,15 +91,13 @@ This project uses `uv` for package management.
 
     # Install dependencies
     uv sync
-
-    # Install development dependencies (e.g., for running tests)
-    uv pip install -e .[dev]
     ```
 
 2.  **Run Locally:**
     ```bash
-    # Example of running with local auth disabled
-    export AUTH_VALIDATION_URL=https://httpbin.org/post
+    # Example run with local auth disabled and a shared secret set
+    export AUTH_LOCAL_ENABLED=false
+    export OCR_SHARED_SECRET="a-local-secret-key"
     uv run python main.py api --port 8000
     ```
 

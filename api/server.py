@@ -17,8 +17,6 @@ import uvicorn
 from .models import *
 from .routes import create_routes
 from .mcp import MCPHandler
-# 身份验证中间件
-from .middleware import AuthMiddleware
 
 
 class DDDDOCRService:
@@ -180,9 +178,6 @@ def create_app() -> FastAPI:
         lifespan=lifespan
     )
     
-    # 身份验证中间件
-    app.add_middleware(AuthMiddleware)
-
     # 添加CORS中间件
     app.add_middleware(
         CORSMiddleware,

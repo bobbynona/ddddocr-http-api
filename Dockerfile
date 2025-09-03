@@ -1,36 +1,52 @@
-# 阶段 1: 构建器 (Builder)
-FROM python:3.12-slim as builder
+# 阶段 1: 基础构建器 - 仅安装第三方依赖
+# 这一层的目的是创建一个包含所有重量级依赖的缓存层
+FROM python:3.12-slim as builder-deps
 
-RUN pip install --no-cache-dir -U pip uv
-ENV UV_PROJECT_ENVIRONMENT=/usr/local
-ENV PYTHONUNBUFFERED=1
+# 安装 uv
+RUN pip install -U --no-cache-dir uv
+
 WORKDIR /app
 
-# 仅复制依赖定义文件
+# 复制项目依赖定义文件
 COPY pyproject.toml uv.lock* ./
 
-# 安装所有依赖项到系统 Python 环境中
-RUN uv sync --frozen
+# 使用 --frozen 标志，uv 将使用 lockfile 作为唯一信源，且不会尝试更新它
+# 使用 --no-install-project 标志，只安装第三方依赖，为 Docker 提供完美的缓存层
+RUN uv sync --frozen --no-install-project
 
-# 阶段 2: 最终镜像 (Final Image)
-FROM python:3.12-slim as final
+# 阶段 2: 应用构建器 - 添加应用代码
+# 这一层基于上一层，只添加轻量的、经常变动的应用代码
+FROM builder-deps as builder-app
 
-# 安装curl，以便入口点脚本可以使用它
-RUN apt-get update && apt-get install -y curl --no-install-recommends && rm -rf /var/lib/apt/lists/*
-
-ENV PYTHONUNBUFFERED=1
-COPY --from=builder /usr/local /usr/local
 WORKDIR /app
 
-# 复制应用源代码
+# 复制应用代码
+COPY api/ ./api/
 COPY main.py ./
-COPY app/ ./app/
 
-# 复制并设置入口点脚本
-COPY entrypoint.sh .
-RUN chmod +x entrypoint.sh
+# 阶段 3: 最终镜像
+# 从一个全新的、干净的基础镜像开始，保证最小体积
+FROM python:3.12-slim
 
+WORKDIR /app
+
+# 从 builder-base 阶段复制 uv 可执行文件，确保最终镜像中有 uv 命令
+COPY --from=builder-deps /usr/local/bin/uv /usr/local/bin/uv
+
+# 从最终的构建器阶段 (builder-app) 精确复制所需的一切
+COPY --from=builder-app /app/.venv ./.venv
+COPY --from=builder-app /app/pyproject.toml /app/uv.lock* ./
+COPY --from=builder-app /app/api/ ./api/
+COPY --from=builder-app /app/main.py ./
+
+# 暴露端口
 EXPOSE 8000
 
-# 将入口点设置为我们的脚本
-ENTRYPOINT ["./entrypoint.sh"]
+# 设置环境变量，让 shell 和 uv 自动找到并使用项目内的 .venv
+# 注意：虽然 uv run 会自动激活 .venv，但显式设置 PATH 是一个最佳实践，
+# 它极大地简化了通过 `docker exec` 进入容器进行手动调试的过程。
+ENV PATH="/app/.venv/bin:$PATH"
+
+# 最终的入口点和命令
+ENTRYPOINT ["uv", "run", "python", "main.py"]
+CMD ["api"]
